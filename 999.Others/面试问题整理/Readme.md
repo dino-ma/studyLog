@@ -112,11 +112,11 @@ Redis中setnx不支持设置过期时间，做分布式锁时要想避免某一�
 
 Redis为了保证效率，数据缓存在了内存中，但是会周期性的把更新的数据写入磁盘或者把修改操作写入追加的记录文件中，以保证数据的持久化。Redis的持久化策略有两种：
    1. RDB：快照形式是直接把内存中的数据保存到一个dump的文件中，定时保存，保存策略。
-  当Redis需要做持久化时，Redis会fork一个子进程，子进程通过me将数据写到磁盘上一个临时RDB文件中。当子进程完成写临时文件后，将原来的RDB替换掉。Redis的RDB文件不会坏掉，因为其写操作是在一个新进程中进行的，当生成一个新的RDB文件时，Redis生成的子进程会先将数据写到一个临时文件中，然后通过原子性rename系统调用将临时文件重命名为RDB文件，这样在任何时候出现故障，Redis的RDB文件都总是可用的。同时，Redis的RDB文件也是Redis主从同步内部实现中的一环。RDB有他的不足，就是一旦数据库出现问题，那么我们的RDB文件中保存的数据并不是全新的，从上次RDB文件生成到Redis停机这段时间的数据全部丢掉了。在某些业务下，这是可以忍受的。
+    当Redis需要做持久化时，Redis会fork一个子进程，子进程通过me将数据写到磁盘上一个临时RDB文件中。当子进程完成写临时文件后，将原来的RDB替换掉。Redis的RDB文件不会坏掉，因为其写操作是在一个新进程中进行的，当生成一个新的RDB文件时，Redis生成的子进程会先将数据写到一个临时文件中，然后通过原子性rename系统调用将临时文件重命名为RDB文件，这样在任何时候出现故障，Redis的RDB文件都总是可用的。同时，Redis的RDB文件也是Redis主从同步内部实现中的一环。RDB有他的不足，就是一旦数据库出现问题，那么我们的RDB文件中保存的数据并不是全新的，从上次RDB文件生成到Redis停机这段时间的数据全部丢掉了。在某些业务下，这是可以忍受的。
    2. AOF：把所有的对Redis的服务器进行修改的命令都存到一个文件里，命令的集合。
-  使用AOF做持久化，每一个写命令都通过write函数追加到appendonly.aof中。aof的默认策略是每秒钟fsync一次，在这种配置下，就算发生故障停机，也最多丢失一秒钟的数据。
-  缺点是对于相同的数据集来说，AOF的文件体积通常要大于RDB文件的体积。根据所使用的fsync策略，AOF的速度可能会慢于RDB。
-  Redis默认是快照RDB的持久化方式。对于主从同步来说，主从刚刚连接的时候，进行全量同步（RDB）；全同步结束后，进行增量同步(AOF)。
+    使用AOF做持久化，每一个写命令都通过write函数追加到appendonly.aof中。aof的默认策略是每秒钟fsync一次，在这种配置下，就算发生故障停机，也最多丢失一秒钟的数据。
+    缺点是对于相同的数据集来说，AOF的文件体积通常要大于RDB文件的体积。根据所使用的fsync策略，AOF的速度可能会慢于RDB。
+    Redis默认是快照RDB的持久化方式。对于主从同步来说，主从刚刚连接的时候，进行全量同步（RDB）；全同步结束后，进行增量同步(AOF)。
 
   ![img](https://mashengjie.com/wp-content/uploads/2020/12/string.jpg)
 
@@ -145,6 +145,36 @@ Redis为了保证效率，数据缓存在了内存中，但是会周期性的把
 对于单线程阻塞式的Redis，Pipeline可以满足批量的操作，把多个命令连续的发送给Redis Server，然后一一解析响应结果。Pipelining可以提高批量处理性能，提升的原因主要是TCP连接中减少了“交互往返”的时间。pipeline 底层是通过把所有的操作封装成流，redis有定义自己的出入输出流。在 sync() 方法执行操作，每次请求放在队列里面，解析响应包。
 
 同理可以参考lua脚本，合理的分布式锁其实都应该是基于lua脚本去实现，redis将lua脚本中的若干redis命令以脚本维度去执行，实现了原子性。
+
+
+
+### RedisCluster
+
+Redis Cluster是一个实现了分布式且允许单点故障的Redis高级版本，它没有中心节点，具有线性可伸缩的功能。下图给出Redis Cluster的分布式存储架构，其中节点与节点之间通过二进制协议（gossip）进行通信，节点与客户端之间通过ascii协议进行通信。在数据的放置策略上，Redis Cluster将整个key的数值域分成4096个哈希槽，每个节点上可以存储一个或多个哈希槽，也就是说当前Redis Cluster支持的最大节点数就是4096。Redis Cluster使用的分布式算法也很简单：crc16( key ) % HASH_SLOTS_NUMBER。
+
+为了保证单点故障下的数据可用性，Redis Cluster引入了Master节点和Slave节点。在Redis Cluster中，每个Master节点都会有对应的两个用于冗余的Slave节点。这样在整个集群中，任意两个节点的宕机都不会导致数据的不可用。当Master节点退出后，集群会自动选择一个Slave节点成为新的Master节点。
+
+Cluster中的每个节点都维护一份在自己看来当前整个集群的状态，主要包括：
+
+1. 当前集群状态
+2. 集群中各节点所负责的slots信息，及其migrate状态
+3. 集群中各节点的master-slave状态
+4. 集群中各节点的存活状态及不可达投票
+
+#### Gossip协议
+
+基于Gossip协议当集群状态变化时，如新节点加入、slot迁移、节点宕机、slave提升为新Master，我们希望这些变化尽快的被发现，传播到整个集群的所有节点并达成一致。节点之间相互的心跳（PING，PONG，MEET）及其携带的数据是集群状态传播最主要的途径。
+
+gossip 协议（gossip protocol）又称 epidemic 协议（epidemic protocol），是基于流行病传播方式的节点或者进程之间信息交换的协议。在分布式系统中被广泛使用，比如我们可以使用 gossip 协议来确保网络中所有节点的数据一样。
+
+Redis 集群是去中心化的，彼此之间状态同步靠 gossip 协议通信，集群的消息有以下几种类型：
+
+- **Meet** 通过「cluster meet ip port」命令，已有集群的节点会向新的节点发送邀请，加入现有集群。
+- **Ping** 节点每秒会向集群中其他节点发送 ping 消息，消息中带有自己已知的两个节点的地址、槽、状态信息、最后一次通信时间等。
+- **Pong** 节点收到 ping 消息后会回复 pong 消息，消息中同样带有自己已知的两个节点信息。
+- **Fail** 节点 ping 不通某节点后，会向集群所有节点广播该节点挂掉的消息。其他节点收到消息后标记已下线。
+
+
 
 ## Mysql
 
@@ -249,7 +279,7 @@ MySQL为了保证ACID中的一致性和持久性，使用了WAL(Write-Ahead Logg
 
 ### 覆盖索引
 
-指一个查询语句的执行只用从索引中就能够取得，不必从数据表中读取。也可以称之为实现了索引覆盖。
+指一个查询语句的执行只用从索引中就能够取得，不必从数据表中读取。也可以称之为实现了索引覆盖。（譬如某个联合索引 uid,gift_id）
 
 ### 查询在什么时候不走（预期中的）索引
 
@@ -560,7 +590,7 @@ Kafka最初考虑的问题是，customer应该从brokes拉取消息还是brokers
 2. TCP提供可靠的服务。也就是说，通过TCP连接传送的数据，无差错，不丢失，不重复，且按序到达;UDP尽最大努力交付，即不保证可靠交付。
 3. TCP面向字节流，实际上是TCP把数据看成一连串无结构的字节流，UDP是面向报文的，UDP没有拥塞控制，因此网络出现拥塞不会使源主机的发送速率降低（对实时应用很有用，如IP电话，实时视频会议等）
 4. 每一条TCP连接只能是点到点的，UDP支持一对一，一对多，多对一和多对多的交互通信。
-5. TCP首部开销20字节，UDP的首部开销小，只有8个字节。
+   5. TCP首部开销20字节，UDP的首部开销小，只有8个字节。
 6. TCP的逻辑通信信道是全双工的可靠信道，UDP则是不可靠信道。
 
 ### tcp和udp的优点
@@ -700,3 +730,41 @@ select quantity from products WHERE id=3 for update;
 quantity = select quantity from products WHERE id=3;
 update products set quantity = ($quantity-1) WHERE id=3 and queantity = $quantity;
 ```
+
+
+
+
+
+### elasticsearch（ES）搜索引擎
+
+ES基于Lucene，正排索引（document to words），倒排索引（words to document）。
+
+Elasticsearch 使用一种称为 *倒排索引* 的结构，它适用于快速的全文搜索。一个倒排索引由文档中所有不重复词的列表构成，对于其中每个词，有一个包含它的文档列表。
+
+通过字典树（譬如gin的路由算法）来优化查询效能。
+
+![img](https://pic1.zhimg.com/80/v2-b601cbe28ef7c822b393451cf2347e9c_1440w.jpg)
+
+
+
+
+
+### Etcd&Consul&ZK
+
+
+
+ 
+
+| Feature                | Consol                    | Etcd                   | zookeeper  |
+| ---------------------- | ------------------------- | ---------------------- | ---------- |
+| 服务健康检查           | 支持健康检查              | 支持健康检查           | 无健康检查 |
+| 多数据中心             | 支持                      | —                      | —          |
+| Kv存储服务             | 支持                      | 支持                   | 支持       |
+| 一致性算法             | Raft                      | Raft                   | Pacts      |
+| Cap                    | Cp                        | Cp                     | Cp         |
+| 使用接口（多语言能力） | 支持http和dns             | 客户端                 | http/grpc  |
+| watch支持              | 全量、长轮询logng polling | 支持长轮询long polling | 支持       |
+| 自身监控               | Metrics                   | Metrics                | —          |
+| 安全                   | Acl、Https                | Https                  | All        |
+| 开发语言               | Go                        | Go                     | Java       |
+
