@@ -56,7 +56,8 @@
 
 	3.	go语言通过Hmap和Bmap去描述哈希表和桶
 		1.	每个Bmap只存储8个键值对（TopHash uint8 可以理解为是一级缓存加速检索）
-		2.	哈希表小于等于25个元素时会直接压入哈希表，否则会调整为两个数组，在变异期间循环加入目标哈希表。
+			1.1 为什么是8而不是7或9，可以参考离散概率公式泊松分布
+		2.	哈希表小于等于25个元素时会直接压入哈希表，否则会调整为两个数组，在遍历期间循环加入目标哈希表。
 		3.	Hmap中有一个随机种子（fastrand）用于在for range 为哈希表的遍历引入不确定性，也是告诉所有使用 Go 语言的使用者，程序不要依赖于哈希表的稳定遍历。
 		4.	在判断hash表中的key是否存在时，必须使用 v,ok := map["key"] 而不要使用零值进行判断
 		5.	哈希表的扩容非原子操作（写入时做增量扩容和等量扩容，通过gc+）
@@ -128,7 +129,7 @@
    3.	WaitGroup
       1.	sync.WaitGroup 可以等待一组 Goroutine 的返回，一个比较常见的使用场景是批量发出 RPC 或者 HTTP 请求,我们可以通过 sync.WaitGroup 将原本顺序执行的代码在多个 Goroutine 中并发执行，加快程序处理的速度。
       2.	sync.WaitGroup 必须在 sync.WaitGroup.Wait 方法返回之后才能被重新使用；
-      3.	sync.WaitGroup.Done 只是对 sync.WaitGroup.Add 方法的简单封装，我们可以向 sync.WaitGroup.Add 方法传入任意负数（需要保证计数器非负）快速将计数器归零以唤醒其他等待的 Goroutine；
+      3.	sync.WaitGroup.Done 只是对 sync.WaitGroup.Add 方法的简单封装，我们可以向 sync.WaitGroup.Add 方法传入任意整数（需要保证计数器非负）快速将计数器归零以唤醒其他等待的 Goroutine；
       4.	可以同时有多个 Goroutine 等待当前 sync.WaitGroup 计数器的归零，这些 Goroutine 会被同时唤醒；
    4.	Once
       1.	Go 语言标准库中 sync.Once 可以保证在 Go 程序运行期间的某段代码只会执行一次。
